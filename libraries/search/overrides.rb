@@ -61,8 +61,11 @@ module Search
       end
     end
 
-    def search_nodes(_query, start, rows, &block)
-      _result = []
+    def search_nodes(query, start, rows, &block)
+      all_nodes.select { |node| query.match(node.to_hash) }
+    end
+
+    def all_nodes
       Dir.glob(File.join(Chef::Config[:data_bag_path], "node", "*.json")).map do |f|
         json = Yajl::Parser.parse(File.read(f))
 
@@ -71,14 +74,46 @@ module Search
           json["automatic"]["hostname"] = json.delete("hostname")
         end
 
-        node = Chef::Node.json_create(json) # Create a chef node to ensure expansion of data
+        node = solo_create_node_from_json(json)
+
+        if node.name.nil?
+          node.name(node.hostname)
+        end
+
         node.expand!('disk') # And expand using disk
 
-        if _query.match(node.to_hash)
-          _result << node
-        end
+        node
       end
-      return _result
+    end
+
+    def solo_create_node_from_json(o)
+      node = Chef::Node.new
+
+      node.name(o["name"])
+      node.chef_environment(o["chef_environment"])
+
+      if o.has_key?("attributes")
+        node.normal_attrs = o["attributes"]
+      end 
+
+      cl = Chef::CookbookLoader.new(Chef::Config[:cookbook_path])
+      cl.load_cookbooks
+
+      require "debugger"
+      debugger
+
+      node.automatic_attrs = Mash.new(o["automatic"]) if o.has_key?("automatic")
+      node.normal_attrs = Mash.new(o["normal"]) if o.has_key?("normal")
+      node.default_attrs = Mash.new(o["default"]) if o.has_key?("default")
+      node.override_attrs = Mash.new(o["override"]) if o.has_key?("override")
+
+      if o.has_key?("run_list")
+        node.run_list.reset!(o["run_list"])
+      else
+        o["recipes"].each { |r| node.recipes << r } 
+      end 
+
+      node
     end
 
     def search_roles(query, start, rows, &block)
